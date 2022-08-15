@@ -115,7 +115,6 @@ int max_action = 0;  // 最大行動回数
 int n, k;
 vector<vector<int>> g;
 BidirectionalMap computers;
-vector<int> computer_ids;
 
 // =======================================================
 // 初期化
@@ -125,9 +124,7 @@ void init() {
   // 入力を読み取る
   cin >> n >> k;
   g = vector<vector<int>>(n, vector<int>(n));
-  computer_ids = vector<int>(k * 100);
-  vector<int> ids(k);
-  int idx = 0;
+  int id = 0;
   rep(i, n) {
     string s;
     cin >> s;
@@ -138,10 +135,8 @@ void init() {
       } else {
         type--;
         // 各コンピュータに id を設定
-        int id = type * 1000 + ids[type];
-        ids[type]++;
         computers.set(id, {i, j});
-        computer_ids[idx++] = id;
+        id++;
       }
       g[i][j] = type;
     }
@@ -255,7 +250,7 @@ vector<pair<grid, grid>> connect() {
 // =======================================================
 
 int calc_score(const vector<pair<grid, grid>>& connection) {
-  DisjointSet dj(10000 * k);
+  DisjointSet dj(k * 100);
   for (const auto& conn : connection) {
     grid source = conn.first, dest = conn.second;
     int source_id = computers.get(source), dest_id = computers.get(dest);
@@ -263,15 +258,16 @@ int calc_score(const vector<pair<grid, grid>>& connection) {
   }
 
   int score = 0;
-  rep(i, computer_ids.size()) {
-    FOR(j, i + 1, computer_ids.size()) {
-      int id1 = computer_ids[i], id2 = computer_ids[j];
+  rep(i, k * 100) {
+    FOR(j, i + 1, k * 100) {
       // 同一のクラスタに所属していない
-      if (!dj.isSame(id1, id2)) {
+      if (!dj.isSame(i, j)) {
         continue;
       }
       // コンピュータのタイプが一緒
-      if (id1 / 1000 == id2 / 1000) {
+      auto pos1 = computers.get(i), pos2 = computers.get(j);
+      int type1 = g[pos1.x][pos1.y], type2 = g[pos2.x][pos2.y];
+      if (type1 == type2) {
         score++;
       } else {
         score--;
