@@ -193,10 +193,98 @@ bool can_move(grid pos, int x, int y) {
 }
 
 // =======================================================
+// サーバを移動する
+// =======================================================
+
+vector<pair<grid, grid>> move() {
+  const int THRESHOLD = 10;  // 最大行動可能ターン数
+  vector<pair<grid, grid>> res;
+  int num_row_for_computer_type = n / k;
+  rep(i, n) {
+    rep(j, n) {
+      if (g[i][j] == EMPTY) {
+        continue;
+      }
+      int type = g[i][j];
+      // 対象の行にいるかを確認する
+      int min_row = type * num_row_for_computer_type;
+      int max_row = (type + 1) * num_row_for_computer_type - 1;
+      if (min_row <= i && i <= max_row) {
+        // 対象の行内にいる
+        continue;
+      }
+
+      bool ok = true;
+      // 移動
+      grid cur = {i, j};
+      vector<pair<grid, grid>> tmp;
+      // 対象の行よりも上にいる場合
+      if (min_row > i) {
+        int diff = min_row - i;
+        for (int count = 0;; ++count) {
+          // 下に移動できる
+          if (can_move(cur, 1, 0)) {
+            diff--;
+            grid prev = cur;
+            cur.x++;
+            tmp.push_back({prev, cur});
+          } else {
+            ok = false;
+          }
+          if (diff == 0) {
+            break;
+          }
+          if (count > THRESHOLD) {
+            break;
+          }
+        }
+      } else {
+        // 対象の行よりも下にいる場合
+        int diff = i - max_row;
+        for (int count = 0;; ++count) {
+          // 上に移動できる
+          if (can_move(cur, -1, 0)) {
+            diff--;
+            grid prev = cur;
+            cur.x--;
+            tmp.push_back({prev, cur});
+          } else {
+            ok = false;
+          }
+          if (diff == 0) {
+            break;
+          }
+          if (count > THRESHOLD) {
+            break;
+          }
+        }
+      }
+      // THRESHOLD以下なら移動として追加する
+      if ((int)tmp.size() > THRESHOLD || !ok) {
+        continue;
+      }
+
+      for (const auto& e : tmp) {
+        auto prev = e.first, next = e.second;
+        int id = computers.get(prev);
+        g[prev.x][prev.y] = EMPTY;
+        g[next.x][next.y] = type;
+        computers.set(id, next);
+
+        res.push_back(e);
+      }
+    }
+  }
+
+  return res;
+}
+
+// =======================================================
 // サーバ同士を接続する
 // =======================================================
 
 vector<pair<grid, grid>> connect() {
+  DisjointSet dj(k * 100);
   vector<pair<grid, grid>> res;
   // 横方向の接続
   rep(i, n) {
@@ -213,7 +301,11 @@ vector<pair<grid, grid>> connect() {
       } else {
         grid now = {i, j};
         if (can_connnect(pos, now)) {
-          res.push_back({pos, now});
+          int id1 = computers.get(pos), id2 = computers.get(now);
+          if (!dj.isSame(id1, id2)) {
+            res.push_back({pos, now});
+            dj.makeSet(id1, id2);
+          }
         }
       }
       pos = {i, j};
@@ -235,7 +327,11 @@ vector<pair<grid, grid>> connect() {
       } else {
         grid now = {i, j};
         if (can_connnect(pos, now, false)) {
-          res.push_back({pos, now});
+          int id1 = computers.get(pos), id2 = computers.get(now);
+          if (!dj.isSame(id1, id2)) {
+            res.push_back({pos, now});
+            dj.makeSet(id1, id2);
+          }
         }
       }
       pos = {i, j};
@@ -290,19 +386,26 @@ void print() {
 
 void solve() {
   // 移動回数
-  cout << 0 << endl;
+  auto movements = move();
+  int num_move = min(k * 100, (int)movements.size());
+  cout << num_move << endl;
+  rep(i, num_move) {
+    grid source = movements[i].first;
+    grid dest = movements[i].second;
+    cout << source.x << " " << source.y << " " << dest.x << " " << dest.y
+         << endl;
+  }
+
+  // 接続回数
   auto connection = connect();
-  int num_connect = min(max_action, (int)connection.size());
+  int num_connect = max(0, min(max_action - num_move, (int)connection.size()));
   cout << num_connect << endl;
   rep(i, num_connect) {
     grid source = connection[i].first;
-    grid destination = connection[i].second;
-    cout << source.x << " " << source.y << " " << destination.x << " "
-         << destination.y << endl;
+    grid dest = connection[i].second;
+    cout << source.x << " " << source.y << " " << dest.x << " " << dest.y
+         << endl;
   }
-
-  cout << "score: " << calc_score(connection) << endl;
-  ;
 }
 
 int main() {
