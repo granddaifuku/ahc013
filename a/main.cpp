@@ -404,16 +404,6 @@ int calc_score(const vector<pair<grid, grid>>& connection) {
   return max(score, 0);
 }
 
-// =======================================================
-// 解答を出力
-// =======================================================
-
-void print() {
-  // 移動
-
-  // 接続
-}
-
 void solve() {
   // 移動回数
   auto movements = move();
