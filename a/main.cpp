@@ -197,6 +197,7 @@ bool can_move(grid pos, int x, int y) {
 // =======================================================
 
 vector<pair<grid, grid>> move() {
+  const int MAX_MOVE = k * 100 / 2;
   const int THRESHOLD = 10;  // 最大行動可能ターン数
   vector<pair<grid, grid>> res;
   int num_row_for_computer_type = n / k;
@@ -204,6 +205,9 @@ vector<pair<grid, grid>> move() {
     rep(j, n) {
       if (g[i][j] == EMPTY) {
         continue;
+      }
+      if ((int)res.size() > MAX_MOVE) {
+        break;
       }
       int type = g[i][j];
       // 対象の行にいるかを確認する
@@ -214,6 +218,7 @@ vector<pair<grid, grid>> move() {
         continue;
       }
 
+      vector<vector<bool>> visited(n, vector<bool>(n));
       bool ok = true;
       // 移動
       grid cur = {i, j};
@@ -222,11 +227,25 @@ vector<pair<grid, grid>> move() {
       if (min_row > i) {
         int diff = min_row - i;
         for (int count = 0;; ++count) {
+          visited[cur.x][cur.y] = true;
+          grid prev = cur;
           // 下に移動できる
-          if (can_move(cur, 1, 0)) {
+          if (can_move(cur, 1, 0) && !visited[cur.x + 1][cur.y]) {
             diff--;
-            grid prev = cur;
             cur.x++;
+            tmp.push_back({prev, cur});
+          } else if (can_move(cur, 0, 1) && !visited[cur.x][cur.y + 1]) {
+            // 右に移動する
+            cur.y++;
+            tmp.push_back({prev, cur});
+          } else if (can_move(cur, 0, -1) && !visited[cur.x][cur.y - 1]) {
+            // 左に移動する
+            cur.y--;
+            tmp.push_back({prev, cur});
+          } else if (can_move(cur, -1, 0) && !visited[cur.x - 1][cur.y]) {
+            // 上に移動する
+            diff++;
+            cur.x--;
             tmp.push_back({prev, cur});
           } else {
             ok = false;
@@ -242,11 +261,22 @@ vector<pair<grid, grid>> move() {
         // 対象の行よりも下にいる場合
         int diff = i - max_row;
         for (int count = 0;; ++count) {
+          visited[cur.x][cur.y] = true;
+          grid prev = cur;
           // 上に移動できる
-          if (can_move(cur, -1, 0)) {
+          if (can_move(cur, -1, 0) && !visited[cur.x - 1][cur.y]) {
             diff--;
-            grid prev = cur;
             cur.x--;
+            tmp.push_back({prev, cur});
+          } else if (can_move(cur, 0, 1) && !visited[cur.x][cur.y + 1]) {
+            cur.y++;
+            tmp.push_back({prev, cur});
+          } else if (can_move(cur, 0, -1) && !visited[cur.x][cur.y - 1]) {
+            cur.y--;
+            tmp.push_back({prev, cur});
+          } else if (can_move(cur, 1, 0) && !visited[cur.x + 1][cur.y]) {
+            diff++;
+            cur.x++;
             tmp.push_back({prev, cur});
           } else {
             ok = false;
