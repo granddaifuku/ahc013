@@ -1,5 +1,7 @@
 #include <bits/stdc++.h>
 
+#include <chrono>
+
 using namespace std;
 
 #define rep(i, n) for (int i = 0; i < (int)n; ++i)
@@ -107,14 +109,82 @@ struct BidirectionalMap {
 // =======================================================
 // 変数群
 // =======================================================
+// ランダムユーティリティの初期化
+random_device seed_gen;
+mt19937 engine(seed_gen());
+
+const int BEAM_WIDTH = 3;
 
 const int CABLE = 9;
 const int EMPTY = 8;
 
 int max_action = 0;  // 最大行動回数
-int n, k;
-vector<vector<int>> g;
-BidirectionalMap computers;
+int N, K;
+vector<vector<int>> G;
+BidirectionalMap COMPUTERS;
+
+// =======================================================
+// ビームサーチ用の状態
+// =======================================================
+
+struct Status {
+  int num_remain_action;
+  vector<vector<int>> g;
+  BidirectionalMap computers;
+  int score;
+  vector<pair<grid, grid>> movements;
+  vector<pair<grid, grid>> connections;
+
+  int target_id;
+
+ public:
+  Status(int num_remain_action_, vector<vector<int>> g_,
+         BidirectionalMap computers_) {
+    this->num_remain_action = num_remain_action_;
+    this->g = g_;
+    this->computers = computers_;
+    score = 0;
+  }
+  Status(const Status& old) {
+    this->num_remain_action = old.num_remain_action;
+
+    this->score = old.score;
+    this->target_id = old.target_id;
+
+    g = vector<vector<int>>(N, vector<int>(N));
+
+    rep(i, N) {
+      rep(j, N) { this->g[i][j] = old.g[i][j]; }
+    }
+    for (const auto& e : old.movements) {
+      this->movements.push_back(e);
+    }
+    for (const auto& e : old.connections) {
+      this->connections.push_back(e);
+    }
+
+    for (const auto& e : old.computers.computer_to_id) {
+      this->computers.computer_to_id.insert(e);
+    }
+    for (const auto& e : old.computers.id_to_computer) {
+      this->computers.id_to_computer.insert(e);
+    }
+  }
+
+  void remove_cable() {
+    rep(i, N) {
+      rep(j, N) {
+        if (this->g[i][j] == CABLE) {
+          this->g[i][j] = EMPTY;
+        }
+      }
+    }
+  }
+};
+
+bool operator<(const Status& lhs, const Status& rhs) {
+  return lhs.score < rhs.score;
+}
 
 // =======================================================
 // 初期化
@@ -122,187 +192,109 @@ BidirectionalMap computers;
 
 void init() {
   // 入力を読み取る
-  cin >> n >> k;
-  g = vector<vector<int>>(n, vector<int>(n));
+  cin >> N >> K;
+  G = vector<vector<int>>(N, vector<int>(N));
   int id = 0;
-  rep(i, n) {
+  rep(i, N) {
     string s;
     cin >> s;
-    rep(j, n) {
+    rep(j, N) {
       int type = s[j] - '0';
       if (type == 0) {
         type = EMPTY;
       } else {
         type--;
         // 各コンピュータに id を設定
-        computers.set(id, {i, j});
+        COMPUTERS.set(id, {i, j});
         id++;
       }
-      g[i][j] = type;
+      G[i][j] = type;
     }
   }
 
   // 最大行動回数を設定
-  max_action = 100 * k;
+  max_action = 100 * K;
 }
 
 // =======================================================
-// マス同士が接続可能かどうかを確認する
+// ビームサーチ用の関数群
 // =======================================================
-
-bool can_connnect(grid begin, grid end, bool is_horizontal = true) {
-  bool ok = true;
-  if (is_horizontal) {
-    int row = begin.x;
-    FOR(i, begin.y + 1, end.y) {
-      if (g[row][i] != EMPTY) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) {
-      FOR(i, begin.y + 1, end.y) { g[row][i] = CABLE; }
-    }
-  } else {
-    int col = begin.y;
-    FOR(i, begin.x + 1, end.x) {
-      if (g[i][col] != EMPTY) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) {
-      FOR(i, begin.x + 1, end.x) { g[i][col] = CABLE; }
-    }
-  }
-
-  return ok;
-}
 
 // =======================================================
 // サーバが移動可能かどうかを判定する
 // =======================================================
 
-bool can_move(grid pos, int x, int y) {
-  int nx = pos.x + x, ny = pos.y + y;
-  if (nx < 0 || nx >= n || ny < 0 || ny >= n) {
+bool can_move(const Status& status, int i, int j, int x, int y) {
+  int nx = i + x, ny = j + y;
+  if (nx < 0 || nx >= N || ny < 0 || ny >= N) {
     return false;
   }
 
-  return g[nx][ny] == EMPTY;
+  return status.g[nx][ny] == EMPTY;
+}
+
+void apply_move(Status& status, int i, int j, int x, int y) {
+  int nx = i + x, ny = j + y;
+  grid prev = {i, j}, next = {nx, ny};
+
+  int id = status.computers.get(prev);
+  int type = status.g[i][j];
+  status.g[i][j] = EMPTY;
+  status.computers.set(id, next);
+  status.g[nx][ny] = type;
+
+  status.movements.push_back({prev, next});
+  status.num_remain_action--;
 }
 
 // =======================================================
 // サーバを移動する
 // =======================================================
 
-vector<pair<grid, grid>> move() {
-  const int MAX_MOVE = k * 100 / 2;
-  const int THRESHOLD = 10;  // 最大行動可能ターン数
-  vector<pair<grid, grid>> res;
-  int num_row_for_computer_type = n / k;
-  rep(i, n) {
-    rep(j, n) {
-      if (g[i][j] == EMPTY) {
+vector<Status> move(Status status) {
+  vector<bool> moved(K * 100);
+  int r = engine() % K;
+  vector<Status> res;
+  // 各コンピュータに対してランダムに3マス分動かしてみる
+  const int NUM_MOVE = 5;
+  rep(i, N) {
+    rep(j, N) {
+      if (status.g[i][j] == EMPTY) {
         continue;
       }
-      if ((int)res.size() > MAX_MOVE) {
-        break;
+      if (status.g[i][j] != r) {
+        continue;
       }
-      int type = g[i][j];
-      // 対象の行にいるかを確認する
-      int min_row = type * num_row_for_computer_type;
-      int max_row = (type + 1) * num_row_for_computer_type - 1;
-      if (min_row <= i && i <= max_row) {
-        // 対象の行内にいる
+      if (engine() % 10 != 0) {
+        continue;
+      }
+      int target_id = status.computers.get({i, j});
+      if (moved[target_id]) {
         continue;
       }
 
-      vector<vector<bool>> visited(n, vector<bool>(n));
-      bool ok = true;
-      // 移動
-      grid cur = {i, j};
-      vector<pair<grid, grid>> tmp;
-      // 対象の行よりも上にいる場合
-      if (min_row > i) {
-        int diff = min_row - i;
-        for (int count = 0;; ++count) {
-          visited[cur.x][cur.y] = true;
-          grid prev = cur;
-          // 下に移動できる
-          if (can_move(cur, 1, 0) && !visited[cur.x + 1][cur.y]) {
-            diff--;
-            cur.x++;
-            tmp.push_back({prev, cur});
-          } else if (can_move(cur, 0, 1) && !visited[cur.x][cur.y + 1]) {
-            // 右に移動する
-            cur.y++;
-            tmp.push_back({prev, cur});
-          } else if (can_move(cur, 0, -1) && !visited[cur.x][cur.y - 1]) {
-            // 左に移動する
-            cur.y--;
-            tmp.push_back({prev, cur});
-          } else if (can_move(cur, -1, 0) && !visited[cur.x - 1][cur.y]) {
-            // 上に移動する
-            diff++;
-            cur.x--;
-            tmp.push_back({prev, cur});
-          } else {
-            ok = false;
-          }
-          if (diff == 0) {
-            break;
-          }
-          if (count > THRESHOLD) {
-            break;
-          }
+      moved[target_id] = true;
+      Status after = status;
+      after.target_id = target_id;
+      grid pos = {i, j};
+      rep(k, NUM_MOVE) {
+        // 移動できない場合は抜ける
+        bool moveable = false;
+        rep(l, 4) { moveable |= can_move(after, pos.x, pos.y, dx[l], dy[l]); }
+        if (!moveable) {
+          break;
         }
-      } else {
-        // 対象の行よりも下にいる場合
-        int diff = i - max_row;
-        for (int count = 0;; ++count) {
-          visited[cur.x][cur.y] = true;
-          grid prev = cur;
-          // 上に移動できる
-          if (can_move(cur, -1, 0) && !visited[cur.x - 1][cur.y]) {
-            diff--;
-            cur.x--;
-            tmp.push_back({prev, cur});
-          } else if (can_move(cur, 0, 1) && !visited[cur.x][cur.y + 1]) {
-            cur.y++;
-            tmp.push_back({prev, cur});
-          } else if (can_move(cur, 0, -1) && !visited[cur.x][cur.y - 1]) {
-            cur.y--;
-            tmp.push_back({prev, cur});
-          } else if (can_move(cur, 1, 0) && !visited[cur.x + 1][cur.y]) {
-            diff++;
-            cur.x++;
-            tmp.push_back({prev, cur});
-          } else {
-            ok = false;
-          }
-          if (diff == 0) {
-            break;
-          }
-          if (count > THRESHOLD) {
-            break;
-          }
+
+        // 移動できる場合
+        int idx = engine() % 4;  //移動方向のインデックス
+        while (!can_move(after, pos.x, pos.y, dx[idx], dy[idx])) {
+          idx = engine() % 4;
         }
+        apply_move(after, pos.x, pos.y, dx[idx], dy[idx]);
+        pos.x += dx[idx];
+        pos.y += dy[idx];
       }
-      // THRESHOLD以下なら移動として追加する
-      if ((int)tmp.size() > THRESHOLD || !ok) {
-        continue;
-      }
-
-      for (const auto& e : tmp) {
-        auto prev = e.first, next = e.second;
-        int id = computers.get(prev);
-        g[prev.x][prev.y] = EMPTY;
-        g[next.x][next.y] = type;
-        computers.set(id, next);
-
-        res.push_back(e);
-      }
+      res.push_back(after);
     }
   }
 
@@ -310,28 +302,66 @@ vector<pair<grid, grid>> move() {
 }
 
 // =======================================================
-// サーバ同士を接続する
+// マス同士が接続可能かどうかを確認する
 // =======================================================
 
-vector<pair<grid, grid>> connect() {
-  DisjointSet dj(k * 100);
+bool can_connnect(vector<vector<int>>& tmp_graph, grid begin, grid end,
+                  bool is_horizontal = true) {
+  bool ok = true;
+  if (is_horizontal) {
+    int row = begin.x;
+    FOR(i, begin.y + 1, end.y) {
+      if (tmp_graph[row][i] != EMPTY) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      FOR(i, begin.y + 1, end.y) { tmp_graph[row][i] = CABLE; }
+    }
+  } else {
+    int col = begin.y;
+    FOR(i, begin.x + 1, end.x) {
+      if (tmp_graph[i][col] != EMPTY) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      FOR(i, begin.x + 1, end.x) { tmp_graph[i][col] = CABLE; }
+    }
+  }
+
+  return ok;
+}
+
+// =======================================================
+// サーバを接続する
+// =======================================================
+
+vector<pair<grid, grid>> connect(Status& st) {
+  DisjointSet dj(K * 100);
   vector<pair<grid, grid>> res;
+
   // 横方向の接続
-  rep(i, n) {
+  rep(i, N) {
     int cur_type = EMPTY;
     grid pos = {i, 0};
-    rep(j, n) {
-      if (g[i][j] == EMPTY || g[i][j] == CABLE) {
+    rep(j, N) {
+      if ((int)res.size() >= st.num_remain_action) {
+        return res;
+      }
+      if (st.g[i][j] == EMPTY || st.g[i][j] == CABLE) {
         // コンピュータがない
         continue;
       }
-      if (cur_type != g[i][j]) {
+      if (cur_type != st.g[i][j]) {
         // 違う種類のコンピュータが置いてある
-        cur_type = g[i][j];
+        cur_type = st.g[i][j];
       } else {
         grid now = {i, j};
-        if (can_connnect(pos, now)) {
-          int id1 = computers.get(pos), id2 = computers.get(now);
+        if (can_connnect(st.g, pos, now)) {
+          int id1 = st.computers.get(pos), id2 = st.computers.get(now);
           if (!dj.isSame(id1, id2)) {
             res.push_back({pos, now});
             dj.makeSet(id1, id2);
@@ -343,21 +373,24 @@ vector<pair<grid, grid>> connect() {
   }
 
   // 縦方向の接続
-  rep(j, n) {
+  rep(j, N) {
     int cur_type = EMPTY;
     grid pos = {0, j};
-    rep(i, n) {
-      if (g[i][j] == EMPTY || g[i][j] == CABLE) {
+    rep(i, N) {
+      if ((int)res.size() >= st.num_remain_action) {
+        return res;
+      }
+      if (st.g[i][j] == EMPTY || st.g[i][j] == CABLE) {
         // コンピュータがない
         continue;
       }
-      if (cur_type != g[i][j]) {
+      if (cur_type != st.g[i][j]) {
         // 違う種類のコンピュータが置いてある
-        cur_type = g[i][j];
+        cur_type = st.g[i][j];
       } else {
         grid now = {i, j};
-        if (can_connnect(pos, now, false)) {
-          int id1 = computers.get(pos), id2 = computers.get(now);
+        if (can_connnect(st.g, pos, now, false)) {
+          int id1 = st.computers.get(pos), id2 = st.computers.get(now);
           if (!dj.isSame(id1, id2)) {
             res.push_back({pos, now});
             dj.makeSet(id1, id2);
@@ -375,57 +408,145 @@ vector<pair<grid, grid>> connect() {
 // スコアを計算する
 // =======================================================
 
-int calc_score(const vector<pair<grid, grid>>& connection) {
-  DisjointSet dj(k * 100);
-  for (const auto& conn : connection) {
+void calc_score(Status& st) {
+  DisjointSet prev(K * 100);
+  // 直前の状態を再現
+  for (const auto& conn : st.connections) {
     grid source = conn.first, dest = conn.second;
-    int source_id = computers.get(source), dest_id = computers.get(dest);
-    dj.makeSet(source_id, dest_id);
+    int source_id = st.computers.get(source), dest_id = st.computers.get(dest);
+    prev.makeSet(source_id, dest_id);
   }
 
-  int score = 0;
-  rep(i, k * 100) {
-    FOR(j, i + 1, k * 100) {
-      // 同一のクラスタに所属していない
-      if (!dj.isSame(i, j)) {
-        continue;
+  DisjointSet now = prev;
+  auto connection = connect(st);
+  for (const auto& conn : connection) {
+    grid source = conn.first, dest = conn.second;
+    int source_id = st.computers.get(source), dest_id = st.computers.get(dest);
+    now.makeSet(source_id, dest_id);
+  }
+  st.connections = connection;
+
+  int score_diff = 0;
+  // 対象ノードに関連したスコアの計算を行う
+  int id = st.target_id;
+  rep(i, K * 100) {
+    if (i == id) {
+      continue;
+    }
+
+    if (prev.isSame(id, i)) {
+      if (!now.isSame(id, i)) {
+        score_diff -= prev.getSize(id) - 1;
       }
-      // コンピュータのタイプが一緒
-      auto pos1 = computers.get(i), pos2 = computers.get(j);
-      int type1 = g[pos1.x][pos1.y], type2 = g[pos2.x][pos2.y];
-      if (type1 == type2) {
-        score++;
-      } else {
-        score--;
+    } else {
+      if (now.isSame(id, i)) {
+        score_diff += now.getSize(id) - 1;
       }
     }
   }
 
-  return max(score, 0);
+  st.score = max(0, st.score + score_diff);
+}
+
+// =======================================================
+// 出力する
+// =======================================================
+
+void print(const Status& st) {
+  // 移動
+  cout << st.movements.size() << endl;
+  for (const auto& move : st.movements) {
+    auto src = move.first, dest = move.second;
+    cout << src.x << " " << src.y << " " << dest.x << " " << dest.y << endl;
+  }
+  // 接続
+  cout << st.connections.size() << endl;
+  for (const auto& conn : st.connections) {
+    auto src = conn.first, dest = conn.second;
+    cout << src.x << " " << src.y << " " << dest.x << " " << dest.y << endl;
+  }
 }
 
 void solve() {
-  // 移動回数
-  auto movements = move();
-  int num_move = min(k * 100, (int)movements.size());
-  cout << num_move << endl;
-  rep(i, num_move) {
-    grid source = movements[i].first;
-    grid dest = movements[i].second;
-    cout << source.x << " " << source.y << " " << dest.x << " " << dest.y
-         << endl;
+  chrono::system_clock::time_point start, now;
+  start = chrono::system_clock::now();
+
+  const int MOVE_THRESHOLD = K * 100 / 2;
+  priority_queue<Status> beam;
+  Status init = Status(max_action, G, COMPUTERS);
+  beam.push(init);
+
+  priority_queue<Status> next;
+
+  while (!beam.empty()) {
+    now = chrono::system_clock::now();
+    double elapsed = static_cast<double>(
+        chrono::duration_cast<chrono::microseconds>(now - start).count() /
+        1000.0);
+    if (elapsed >= 2850) {
+      break;
+    }
+    Status st = beam.top();
+
+    if (K * 100 - st.num_remain_action > MOVE_THRESHOLD) {
+      break;
+    }
+    beam.pop();
+
+    // 移動
+    // start = chrono::system_clock::now();
+    vector<Status> movements = move(st);
+    // end = chrono::system_clock::now();
+    // cout << "Move "
+    //      << static_cast<double>(
+    // 							chrono::duration_cast<chrono::microseconds>(end
+    // -
+    // start) 							.count() /
+    // 1000.0)
+    //      << endl;
+
+    // 点数を計算する
+    // start = chrono::system_clock::now();
+    for (Status& status : movements) {
+      calc_score(status);
+      status.remove_cable();
+      next.push(status);
+    }
+    // end = chrono::system_clock::now();
+    // cout << "Calc "
+    //      << static_cast<double>(
+    //             chrono::duration_cast<chrono::microseconds>(end - start)
+    //                 .count() /
+    //             1000.0)
+    //      << endl;
+
+    // 要素を追加する
+    // start = chrono::system_clock::now();
+    if (beam.empty()) {
+      int count = 0;
+      while (!next.empty()) {
+        auto top = next.top();
+        next.pop();
+        beam.push(top);
+        count++;
+        if (count > BEAM_WIDTH) {
+          break;
+        }
+      }
+      // nextをクリアする
+      next = priority_queue<Status>();
+    }
+    // end = chrono::system_clock::now();
+    // cout << "Append "
+    //      << static_cast<double>(
+    // 							chrono::duration_cast<chrono::microseconds>(end
+    // - start) 							.count()
+    // /
+    //             1000.0)
+    //      << endl;
   }
 
-  // 接続回数
-  auto connection = connect();
-  int num_connect = max(0, min(max_action - num_move, (int)connection.size()));
-  cout << num_connect << endl;
-  rep(i, num_connect) {
-    grid source = connection[i].first;
-    grid dest = connection[i].second;
-    cout << source.x << " " << source.y << " " << dest.x << " " << dest.y
-         << endl;
-  }
+  print(beam.top());
 }
 
 int main() {
